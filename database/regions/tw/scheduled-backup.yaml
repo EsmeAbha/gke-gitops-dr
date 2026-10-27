@@ -1,0 +1,18 @@
+# Nightly base backup. WAL is archived continuously, so any point in the retention window
+# can be restored. immediate: a new cluster gets its first backup right away (the other
+# region can't bootstrap from it until it exists).
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: app-db-tw-nightly
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  schedule: "0 0 18 * * *"   # 02:00 Asia/Singapore (seconds-first cron, UTC)
+  immediate: true
+  backupOwnerReference: self
+  method: plugin
+  pluginConfiguration:
+    name: barman-cloud.cloudnative-pg.io
+  cluster:
+    name: app-db-tw

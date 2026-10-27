@@ -1,0 +1,22 @@
+# kind (CI drills): an S3-compatible store (RustFS) stands in for GCS. Both "regions" share it, as both GKE regions share
+# the multi-region bucket.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - objectstore.yaml
+patches:
+  - target:
+      kind: Cluster
+    patch: |-
+      - op: replace
+        path: /spec/instances
+        value: 1
+      - op: replace
+        path: /spec/storage/size
+        value: 1Gi
+      - op: replace
+        path: /spec/resources
+        value: { requests: { cpu: 100m, memory: 256Mi }, limits: { memory: 512Mi } }
+      - op: replace
+        path: /spec/postgresql/parameters/archive_timeout
+        value: "10s"

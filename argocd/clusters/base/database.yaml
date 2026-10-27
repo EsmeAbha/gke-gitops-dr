@@ -1,0 +1,25 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: database
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  project: database
+  source:
+    repoURL: https://github.com/EsmeAbha/gke-gitops-dr.git
+    targetRevision: main
+    path: deploy/REGION
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: db
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    # the Cluster objects opt out of prune and delete themselves (annotation in cluster.yaml)
+    syncOptions: [CreateNamespace=true, SkipDryRunOnMissingResource=true]
+    managedNamespaceMetadata:
+      labels: { pod-security.kubernetes.io/enforce: restricted }
+    retry:   # CRDs from an earlier wave may still be registering
+      limit: 10
+      backoff: { duration: 15s, factor: 2, maxDuration: 3m }

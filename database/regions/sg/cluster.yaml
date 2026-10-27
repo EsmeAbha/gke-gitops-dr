@@ -1,0 +1,51 @@
+# Singapore. The designated primary while spec.replica.primary == app-db-sg.
+# Both regions carry the same replica stanza (CNPG "distributed topology"): failing over is a
+# one-line change to replica.primary in BOTH files, made by PR. See docs/dr-plan.md.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: app-db-sg
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+    # Never pruned or deleted by Argo CD: removing it from Git by mistake must not delete the data.
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
+spec:
+  instances: 3
+  primaryUpdateStrategy: unsupervised
+  affinity:
+    enablePodAntiAffinity: true
+    topologyKey: topology.kubernetes.io/zone   # one instance per zone: a zone outage is not a DR event
+  postgresql:
+    parameters:
+      archive_timeout: "60s"   # ships a WAL segment at least every minute: bounds RPO for the other region
+  storage:
+    size: 20Gi
+  resources:
+    requests: { cpu: 500m, memory: 1Gi }
+    limits: { memory: 1Gi }
+  bootstrap:
+    initdb:
+      database: app
+      owner: app
+  plugins:
+    - name: barman-cloud.cloudnative-pg.io
+      isWALArchiver: true
+      parameters:
+        barmanObjectName: backups
+        serverName: app-db-sg
+  replica:
+    primary: app-db-sg
+    source: app-db-tw
+  externalClusters:
+    - name: app-db-sg
+      plugin:
+        name: barman-cloud.cloudnative-pg.io
+        parameters:
+          barmanObjectName: backups
+          serverName: app-db-sg
+    - name: app-db-tw
+      plugin:
+        name: barman-cloud.cloudnative-pg.io
+        parameters:
+          barmanObjectName: backups
+          serverName: app-db-tw

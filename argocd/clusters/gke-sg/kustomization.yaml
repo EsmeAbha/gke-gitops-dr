@@ -1,0 +1,12 @@
+# What Argo CD in the gke-sg cluster reconciles. Each region runs its own Argo CD and pulls from
+# Git, so losing one region never takes down the tooling needed to recover in the other.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../base
+patches:
+  - target: { kind: Application, name: database }
+    patch: |-
+      - op: replace
+        path: /spec/source/path
+        value: deploy/gke-sg

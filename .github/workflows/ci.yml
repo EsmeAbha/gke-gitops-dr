@@ -1,0 +1,103 @@
+name: ci
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "0 3 * * 1"   # the DR drill also runs weekly: a DR plan nobody has tested lately is a guess
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: DR invariants (single primary, archive paths, prune protection, Argo CD projects)
+        run: python scripts/check_gitops.py
+      - run: pytest -q
+      - name: Schemas of every rendered overlay
+        run: |
+          curl -sL https://github.com/yannh/kubeconform/releases/download/v0.8.0/kubeconform-linux-amd64.tar.gz | tar xz kubeconform
+          CATALOG='https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+          for d in deploy/* argocd/clusters/gke-sg argocd/clusters/gke-tw argocd/clusters/kind; do
+            echo "== $d"
+            kubectl kustomize "$d" | ./kubeconform -strict -summary -schema-location default -schema-location "$CATALOG" \
+              -skip ObjectStore   # barmancloud.cnpg.io is not in the public catalog yet
+          done
+
+  terraform:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false -input=false
+      - run: terraform validate
+
+  alerts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker run --rm -v "$PWD/monitoring:/w" -w /w --entrypoint promtool prom/prometheus:v2.54.1 test rules alerts.test.yaml
+
+  dr-drill:
+    # The real thing on kind: install the platform, build both regions, then destroy data and a region
+    # and measure recovery against the targets. Fails the build if a target is missed.
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - uses: helm/kind-action@v1.15.1
+        with:
+          cluster_name: dr
+      - run: bash ci/kind-drill.sh
+      - if: always()
+        run: cat drill-results/*.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || echo "no drill report" >> "$GITHUB_STEP_SUMMARY"
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: drill-results
+          path: drill-results/
+
+  argocd-sync:
+    # A real Argo CD syncs the platform apps from this commit, through the same AppProjects as production.
+    # Argo CD fetches from GitHub, so this needs the repository to be public.
+    needs: validate
+    if: ${{ !github.event.repository.private }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: helm/kind-action@v1.15.1
+        with:
+          cluster_name: argocd
+      - name: Install Argo CD
+        run: |
+          kubectl create namespace argocd
+          kubectl apply -n argocd --server-side --force-conflicts \
+            -f https://raw.githubusercontent.com/argoproj/argo-cd/v3.5.6/manifests/install.yaml
+          kubectl -n argocd rollout status deployment/argocd-repo-server --timeout=300s
+          kubectl -n argocd rollout status statefulset/argocd-application-controller --timeout=300s
+      - name: Sync the platform apps from this commit
+        run: |
+          kubectl kustomize argocd/clusters/kind \
+            | sed "s#https://github.com/EsmeAbha/gke-gitops-dr.git#https://github.com/${{ github.repository }}.git#g; s#targetRevision: main#targetRevision: ${{ github.sha }}#" \
+            | kubectl apply -f -
+          for app in cert-manager cloudnative-pg barman-cloud; do
+            kubectl -n argocd wait application/$app --for=jsonpath='{.status.sync.status}'=Synced --timeout=600s
+            kubectl -n argocd wait application/$app --for=jsonpath='{.status.health.status}'=Healthy --timeout=600s
+          done
+      - if: failure()
+        run: kubectl -n argocd get applications -o yaml

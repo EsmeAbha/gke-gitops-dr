@@ -1,0 +1,48 @@
+rule_files: [alerts.yaml]
+evaluation_interval: 1m
+tests:
+  - name: archiving fails continuously -> page
+    interval: 1m
+    input_series:
+      - series: cnpg_pg_stat_archiver_failed_count{namespace="db",pod="app-db-sg-1"}
+        values: 0+2x30
+      - series: cnpg_pg_stat_archiver_archived_count{namespace="db",pod="app-db-sg-1"}
+        values: 100x30
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: PostgresWALArchivingFailing
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: PostgresWALArchivingFailing
+        exp_alerts:
+          - exp_labels: { severity: page, namespace: db, pod: app-db-sg-1 }
+            exp_annotations:
+              summary: "db/app-db-sg-1 cannot archive WAL; the DR region is falling behind"
+              runbook_url: https://github.com/EsmeAbha/gke-gitops-dr/blob/main/docs/dr-plan.md#wal-archiving-is-failing
+  - name: an occasional failure that retries successfully is not a page
+    interval: 1m
+    input_series:
+      - series: cnpg_pg_stat_archiver_failed_count{namespace="db",pod="app-db-sg-1"}
+        values: 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1
+      - series: cnpg_pg_stat_archiver_archived_count{namespace="db",pod="app-db-sg-1"}
+        values: 100+1x20
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: PostgresWALArchivingFailing
+        exp_alerts: []
+  - name: replica far behind for 10 minutes -> ticket
+    interval: 1m
+    input_series:
+      - series: cnpg_pg_replication_lag{namespace="db",pod="app-db-tw-1"}
+        values: 20 20 400x15
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: PostgresReplicaFarBehind
+        exp_alerts: []
+      - eval_time: 14m
+        alertname: PostgresReplicaFarBehind
+        exp_alerts:
+          - exp_labels: { severity: ticket, namespace: db, pod: app-db-tw-1 }
+            exp_annotations:
+              summary: "db/app-db-tw-1 is 6m 40s behind its primary"
+              runbook_url: https://github.com/EsmeAbha/gke-gitops-dr/blob/main/docs/dr-plan.md#a-replica-is-far-behind

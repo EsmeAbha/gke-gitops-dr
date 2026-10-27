@@ -1,0 +1,35 @@
+# Two projects, least privilege. Platform operators may create cluster-scoped objects (CRDs,
+# webhooks, RBAC). The database project may only create CNPG objects in namespace db: a bad
+# commit there can't, say, delete a CRD and with it every database in the cluster.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: platform
+  namespace: argocd
+spec:
+  description: Operators the databases depend on
+  sourceRepos: ["https://github.com/EsmeAbha/gke-gitops-dr.git"]
+  destinations:
+    - { server: https://kubernetes.default.svc, namespace: cert-manager }
+    - { server: https://kubernetes.default.svc, namespace: cnpg-system }
+    - { server: https://kubernetes.default.svc, namespace: kube-system }   # cert-manager leader-election Role
+  clusterResourceWhitelist:
+    - { group: "*", kind: "*" }
+---
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: database
+  namespace: argocd
+spec:
+  description: Postgres clusters, backups and object stores
+  sourceRepos: ["https://github.com/EsmeAbha/gke-gitops-dr.git"]
+  destinations:
+    - { server: https://kubernetes.default.svc, namespace: db }
+  clusterResourceWhitelist:
+    - { group: "", kind: Namespace }
+  namespaceResourceWhitelist:
+    - { group: postgresql.cnpg.io, kind: Cluster }
+    - { group: postgresql.cnpg.io, kind: ScheduledBackup }
+    - { group: postgresql.cnpg.io, kind: Backup }
+    - { group: barmancloud.cnpg.io, kind: ObjectStore }

@@ -1,0 +1,17 @@
+# GKE: backups go to a multi-region GCS bucket (survives the loss of either region), and the
+# Postgres pods reach it through Workload Identity: no key files anywhere.
+# PROJECT_ID is set by scripts/set-project.sh (values come from `terraform output`).
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - objectstore.yaml
+patches:
+  - target:
+      kind: Cluster
+    patch: |-
+      - op: add
+        path: /spec/serviceAccountTemplate
+        value:
+          metadata:
+            annotations:
+              iam.gke.io/gcp-service-account: cnpg-backup@PROJECT_ID.iam.gserviceaccount.com

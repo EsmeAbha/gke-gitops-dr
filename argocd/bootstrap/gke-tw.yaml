@@ -1,0 +1,17 @@
+# Applied once per cluster by scripts/bootstrap.sh; from then on, Git is the only way in.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/EsmeAbha/gke-gitops-dr.git
+    targetRevision: main
+    path: argocd/clusters/gke-tw
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }

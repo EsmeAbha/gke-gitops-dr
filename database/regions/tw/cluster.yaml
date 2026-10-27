@@ -1,0 +1,50 @@
+# Taiwan. A replica cluster: it bootstraps from Singapore's base backup and keeps replaying
+# Singapore's WAL from object storage. No network link between the regions is needed, so a
+# partition can't stall the primary. The cost is RPO: up to archive_timeout plus upload time.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: app-db-tw
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+    # Never pruned or deleted by Argo CD: removing it from Git by mistake must not delete the data.
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
+spec:
+  instances: 3
+  primaryUpdateStrategy: unsupervised
+  affinity:
+    enablePodAntiAffinity: true
+    topologyKey: topology.kubernetes.io/zone
+  postgresql:
+    parameters:
+      archive_timeout: "60s"   # applies once this region is promoted
+  storage:
+    size: 20Gi
+  resources:
+    requests: { cpu: 500m, memory: 1Gi }
+    limits: { memory: 1Gi }
+  bootstrap:
+    recovery:
+      source: app-db-sg
+  plugins:
+    - name: barman-cloud.cloudnative-pg.io
+      isWALArchiver: true
+      parameters:
+        barmanObjectName: backups
+        serverName: app-db-tw
+  replica:
+    primary: app-db-sg
+    source: app-db-sg
+  externalClusters:
+    - name: app-db-sg
+      plugin:
+        name: barman-cloud.cloudnative-pg.io
+        parameters:
+          barmanObjectName: backups
+          serverName: app-db-sg
+    - name: app-db-tw
+      plugin:
+        name: barman-cloud.cloudnative-pg.io
+        parameters:
+          barmanObjectName: backups
+          serverName: app-db-tw

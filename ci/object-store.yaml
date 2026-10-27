@@ -1,0 +1,42 @@
+# CI only: an S3-compatible object store standing in for the GCS bucket. Default credentials,
+# no persistence: it lives exactly as long as the kind cluster.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: object-store
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: object-store
+  namespace: object-store
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: object-store }
+  template:
+    metadata:
+      labels: { app: object-store }
+    spec:
+      securityContext: { runAsUser: 10001, runAsGroup: 10001, fsGroup: 10001 }
+      containers:
+        - name: rustfs
+          image: rustfs/rustfs:1.0.3
+          ports: [{ containerPort: 9000 }]
+          volumeMounts:
+            - { name: data, mountPath: /data }
+            - { name: logs, mountPath: /logs }
+          readinessProbe:
+            tcpSocket: { port: 9000 }
+      volumes:
+        - { name: data, emptyDir: {} }
+        - { name: logs, emptyDir: {} }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: object-store
+  namespace: object-store
+spec:
+  selector: { app: object-store }
+  ports: [{ port: 9000, targetPort: 9000 }]

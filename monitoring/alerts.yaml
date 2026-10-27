@@ -1,0 +1,24 @@
+# Alerts on the two things that silently break DR. Metrics are CloudNativePG's default exporter
+# queries. Load with Prometheus rule_files, or wrap in a PrometheusRule for kube-prometheus-stack.
+groups:
+  - name: dr
+    rules:
+      - alert: PostgresWALArchivingFailing
+        # Every failed archive is data the other region doesn't have: the real RPO grows until it's fixed.
+        expr: |
+          increase(cnpg_pg_stat_archiver_failed_count[10m]) > 0
+            and increase(cnpg_pg_stat_archiver_archived_count[10m]) == 0
+        for: 5m
+        labels: { severity: page }
+        annotations:
+          summary: "{{ $labels.namespace }}/{{ $labels.pod }} cannot archive WAL; the DR region is falling behind"
+          runbook_url: https://github.com/EsmeAbha/gke-gitops-dr/blob/main/docs/dr-plan.md#wal-archiving-is-failing
+      - alert: PostgresReplicaFarBehind
+        # Includes the DR region's designated primary. On a database with no writes, replay lag grows
+        # without anything being wrong: keep a heartbeat writer (or the app) generating traffic.
+        expr: cnpg_pg_replication_lag > 300
+        for: 10m
+        labels: { severity: ticket }
+        annotations:
+          summary: "{{ $labels.namespace }}/{{ $labels.pod }} is {{ $value | humanizeDuration }} behind its primary"
+          runbook_url: https://github.com/EsmeAbha/gke-gitops-dr/blob/main/docs/dr-plan.md#a-replica-is-far-behind

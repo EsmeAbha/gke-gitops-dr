@@ -1,0 +1,8 @@
+# CI only: the platform apps, synced by a real Argo CD in kind (see .github/workflows/ci.yml).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../base/projects.yaml
+  - ../base/cert-manager.yaml
+  - ../base/cloudnative-pg.yaml
+  - ../base/barman-cloud.yaml

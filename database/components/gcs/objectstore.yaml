@@ -1,0 +1,16 @@
+apiVersion: barmancloud.cnpg.io/v1
+kind: ObjectStore
+metadata:
+  name: backups
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  retentionPolicy: "14d"   # point-in-time recovery window
+  configuration:
+    destinationPath: gs://PROJECT_ID-pg-backups/
+    googleCredentials:
+      gkeEnvironment: true
+    wal:
+      compression: gzip
+    data:
+      compression: gzip
