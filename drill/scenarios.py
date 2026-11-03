@@ -70,6 +70,23 @@ def wait_for(cond: Callable[[], bool], timeout: float, clock: Clock, every: floa
     return cond()
 
 
+def stable_since(beat: Callable[[], bool], stable_for: float, timeout: float, clock: Clock,
+                 every: float = 1.0) -> float | None:
+    """When the current unbroken run of successful writes began, once it has lasted `stable_for`.
+    The first write is not enough: a promoted instance can accept a write and then restart."""
+    deadline = clock.now() + timeout
+    start = None
+    while clock.now() < deadline:
+        if beat():
+            start = clock.now() if start is None else start
+            if clock.now() - start >= stable_for:
+                return start
+        else:
+            start = None
+        clock.sleep(every)
+    return None
+
+
 class Heartbeat:
     """Writes one row at a time and remembers each write the database acknowledged."""
 
@@ -103,7 +120,7 @@ def survivors(region: Region, acked: list[tuple[int, float]]) -> set[int]:
 
 def region_loss(primary: Region, standby: Region, targets: Targets, *, confirm: str, clock: Clock | None = None,
                 warmup: float = 60, max_standby_lag: float = 120, interval: float = 1.0,
-                promote: str = "patch", recover_timeout: float | None = None,
+                promote: str = "patch", recover_timeout: float | None = None, stable_for: float = 30,
                 log: Callable[[str], None] = print) -> Result:
     """Destroy the primary region's database, fail over to the standby region, measure RTO and RPO.
 
@@ -170,14 +187,27 @@ def region_loss(primary: Region, standby: Region, targets: Targets, *, confirm: 
         note("standby did not accept writes in time")
         return r.judge()
     probe = Heartbeat(standby)
-    if not wait_for(probe.beat, 60, clock, every=1):
-        note("standby reports writable but writes fail")
+    since = stable_since(probe.beat, stable_for, 300 + stable_for, clock)
+    if since is None:
+        note(f"standby reports writable but writes did not stay up for {stable_for:.0f}s")
         return r.judge()
-    r.rto_seconds = clock.now() - t_disaster
-    note(f"RECOVERED: {standby.name} accepts writes")
+    r.rto_seconds = since - t_disaster
+    note(f"RECOVERED: {standby.name} has accepted writes for {stable_for:.0f}s, since {r.rto_seconds:.1f}s after the disaster")
 
     # --- what survived ---
-    kept = survivors(standby, hb.acked)
+    kept = None
+
+    def read_survivors() -> bool:
+        nonlocal kept
+        try:
+            kept = survivors(standby, hb.acked)
+        except DrillError:
+            return False
+        return True
+
+    if not wait_for(read_survivors, 60, clock):
+        note("could not read the surviving writes from the standby")
+        return r.judge()
     lost = [(i, ts) for i, ts in hb.acked if i not in kept]
     r.lost_writes = len(lost)
     r.rpo_seconds = (hb.acked[-1][1] - max(ts for i, ts in hb.acked if i in kept)) if lost and kept else (

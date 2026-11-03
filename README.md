@@ -51,7 +51,7 @@ python -m drill region-loss --primary app-db-sg@db@gke-sg --standby app-db-tw@db
 1. Write a heartbeat row every second and record each one the primary acknowledged.
 2. Delete the primary region's database.
 3. Promote the other region.
-4. Measure the time until writes succeed again (RTO), and which acknowledged writes survived (RPO).
+4. Measure the time until writes succeed and stay up for 30 seconds (RTO, counted from the start of that run, because a promoted instance can accept a write and then restart), and which acknowledged writes survived (RPO).
 
 Writes are matched on ID and timestamp. Postgres logs sequences in batches, so a promoted standby can reuse IDs of writes that were lost, and matching on ID alone would undercount the loss. A test reproduces that case.
 

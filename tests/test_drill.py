@@ -168,6 +168,45 @@ def test_region_loss_measures_data_lost_and_time_to_recover():
     assert p.destroyed and s.promoted_at is not None
 
 
+class RestartsAfterPromotion(FakeRegion):
+    """Accepts its first write once promoted, then restarts: seen from CNPG on kind in CI."""
+    restart_for = 25.0
+    down_until = None
+
+    def sql(self, q):
+        if self.down_until is not None and self.w.clock.t < self.down_until:
+            raise DrillError("FATAL: the database system is shutting down")
+        out = super().sql(q)
+        if q.startswith("insert") and self.down_until is None:
+            self.down_until = self.w.clock.t + self.restart_for
+        return out
+
+
+def test_a_restart_right_after_promotion_counts_towards_rto():
+    w, p, _ = setup(archive_delay=10, promote_delay=20)
+    s = RestartsAfterPromotion(w, "app-db-tw", "standby")
+    r = run_loss(w, p, s)
+    assert r.status == "passed", r.problems
+    assert r.rto_seconds >= 45   # promotion (20s) + restart (25s), not the first write at ~20s
+    assert r.lost_writes is not None
+
+
+class KeepsRestarting(RestartsAfterPromotion):
+    restart_for = 5.0
+
+    def sql(self, q):
+        out = super().sql(q)
+        if q.startswith("insert"):
+            self.down_until = self.w.clock.t + self.restart_for
+        return out
+
+
+def test_writes_that_never_stay_up_fail_the_drill():
+    w, p, _ = setup(promote_delay=20)
+    r = run_loss(w, p, KeepsRestarting(w, "app-db-tw", "standby"))
+    assert r.status != "passed" and r.rto_seconds is None
+
+
 def test_ids_reused_by_the_promoted_standby_are_not_counted_as_survivors():
     w, p, s = setup(archive_delay=10)
     r = run_loss(w, p, s)
